@@ -25,6 +25,8 @@ def generate_config():
              OrderedDict((
                         ('# Where to scan for the original PDF files.', None),
                         ('path', os.path.join(os.path.expanduser('~'), 'Downloads')),
+                        ('\n# Whether to traverse \'path\' recursively or not', None),
+                        ('recursive', 'yes'),
                         ('\n# The path where to save processed PDF files.', None),
                         ('save_path', os.path.join(os.path.expanduser('~'), 'payments')),
                         ('\n# The template to use when creating the directory in save_path.', None),
@@ -48,11 +50,15 @@ def generate_payment_structure_and_write(
         os.makedirs(save_path)
     except FileExistsError:
         pass
-    dst_filename = provider + '.' + dt.strftime('%Y-%m-%d') + '.pdf'
-    shutil.copy(
-        os.path.join(
-            path, pdffile), os.path.join(
-            save_path, dst_filename))
+    dst_filename = provider + '.' + dt.strftime('%Y-%m-%d') + '.' + \
+        payment_id + '.pdf'
+    dst = os.path.join(save_path, dst_filename)
+    if os.path.exists(dst):
+        print(
+            'WARNING: destination file ' + dst_filename +
+            ' already exists. Overwriting.'
+        )
+    shutil.copy(pdffile, os.path.join(save_path, dst_filename))
 
 
 def validate_config(config):
@@ -63,6 +69,10 @@ def validate_config(config):
             print('ERROR: invalid keyword in default_tmpl. Keyword was: ' + i)
             print('Valid keywords are: ' + ','.join(valid_keywords))
             sys.exit(1)
+
+
+def traverse(path):
+    root, dirs, files = os.walk(path)
 
 
 if __name__ == '__main__':
@@ -84,16 +94,32 @@ if __name__ == '__main__':
         pass
 
     # Start crawling directories
-    prog = re.compile('[\w ]+_[0-9]{4}.pdf')
-    files = [f for f in os.listdir(config['DEFAULT']['path']) if prog.match(f)]
+    prog = re.compile('[\w -]+_.{4}.pdf')
+    if config['DEFAULT']['recursive'] == 'yes':
+        files = []
+        for root, dirs, fs in os.walk(path):
+            for f in fs:
+                if prog.match(f):
+                    files.append(os.path.join(root, f))
+    else:
+        files = [os.path.join(path, f)
+                 for f in os.listdir(path) if prog.match(f)]
+
     date_regex = re.compile('.*(\\d{2})[/.-](\\d{2})[/.-](\\d{2}).*')
     time_regex = re.compile('.*(\\d{2})[:.-](\\d{2})[:.-](\\d{2}).*')
     payment_id_regex = re.compile('([0-9]{4})Pago de')
+    provider_regex = re.compile('Trans\.([a-zA-Z/ ]+)[0-9]')
+
+    # Process each PDF file
     for pdffile in files:
-        pdf1 = PdfFileReader(open(os.path.join(path, pdffile), 'rb'))
+        pdf1 = PdfFileReader(open(pdffile, 'rb'))
         page = pdf1.getPage(0)
-        provider = pdffile.split('_')[0]
         text = page.extractText()
+        provider = provider_regex.search(text).groups()[0].replace('/', '-')
+        try:
+            payment_id = payment_id_regex.search(text).groups()[0]
+        except:
+            payment_id = '----'
         day, month, year = date_regex.match(text).groups()
         hour, minute, second = time_regex.match(text).groups()
         year = '20' + year
@@ -104,7 +130,6 @@ if __name__ == '__main__':
             int(hour),
             int(minute),
             int(second))
-        payment_id = payment_id_regex.search(text).groups()[0]
         data = {
             'provider': provider,
             'year': year,
